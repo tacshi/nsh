@@ -631,21 +631,25 @@ struct Segment {
 
 /// `line` as segments placed by cell, `cell` points wide. A cell's text
 /// is a character with a width and the zero-width ones after it (as
-/// [`text_width`] counts the line's columns): the cells one wide go in one
-/// segment from where they start (in whatever styles), and each stretch of
-/// wide cells of one advance (as `advance` measures a cell's text) in a
-/// segment of its own, letter-spaced to two cells a character and centered
-/// in them. A cell ending in a zero-width joiner ends its segment, so
-/// characters the font would join into one glyph keep the cells the
-/// emulator gave them.
+/// [`text_width`] counts the line's columns): the cells one wide that the
+/// font draws one cell wide go in one segment from where they start (in
+/// whatever styles), and each stretch of other cells of one advance (as
+/// `advance` measures a cell's text) in a segment of its own, letter-spaced
+/// to their cells and centered in them: wide characters, and narrow ones
+/// the font draws wider or narrower than a cell (box drawing or block
+/// elements from a fallback font), which would push the rest of the line
+/// off the grid. ASCII is taken to be a cell wide, unmeasured. A cell
+/// ending in a zero-width joiner ends its segment, so characters the font
+/// would join into one glyph keep the cells the emulator gave them.
 fn segments(line: &TerminalLine, cell: f32, mut advance: impl FnMut(&str) -> f32) -> Vec<Segment> {
     use unicode_width::UnicodeWidthChar;
-    // A segment's kind: narrow, or wide of one advance (in hundredths of
-    // a point, so equal advances compare equal).
+    // A segment's kind: a cell wide as drawn, or `cells` wide drawn at
+    // one advance (in hundredths of a point, so equal advances compare
+    // equal).
     #[derive(PartialEq, Clone, Copy)]
     enum Kind {
         Narrow,
-        Wide(i32),
+        Fitted { advance: i32, cells: usize },
     }
     let mut out: Vec<(Kind, bool, Segment)> = Vec::new();
     let mut col = 0usize;
@@ -665,16 +669,25 @@ fn segments(line: &TerminalLine, cell: f32, mut advance: impl FnMut(&str) -> f32
         }
         for g in cells {
             let width = text_width(g);
-            let kind = match width >= 2 {
-                true => Kind::Wide((advance(g) * 100.0).round() as i32),
-                false => Kind::Narrow,
+            let kind = if width < 2 && g.is_ascii() {
+                Kind::Narrow
+            } else {
+                let drawn = advance(g);
+                if width < 2 && (drawn - cell).abs() <= cell * 0.01 {
+                    Kind::Narrow
+                } else {
+                    Kind::Fitted {
+                        advance: (drawn * 100.0).round() as i32,
+                        cells: width.max(1),
+                    }
+                }
             };
             let open = matches!(out.last(), Some((k, closed, _)) if *k == kind && !closed);
             if !open {
                 let (x, spacing) = match kind {
                     Kind::Narrow => (cell * col as f32, 0.0),
-                    Kind::Wide(adv) => {
-                        let spacing = 2.0 * cell - adv as f32 / 100.0;
+                    Kind::Fitted { advance, cells } => {
+                        let spacing = cells as f32 * cell - advance as f32 / 100.0;
                         (cell * col as f32 + spacing / 2.0, spacing)
                     }
                 };
@@ -933,6 +946,34 @@ mod tests {
         // 中 at 0; the thumb (another advance) at 2, the man and his joiner
         // with it; the woman, after the joiner, at 6.
         assert_eq!(at, [1.5, 16.5, 48.5]);
+    }
+
+    #[test]
+    fn narrow_characters_the_font_draws_off_the_cell_keep_their_cells() {
+        let plain = TerminalStyle::default();
+        // A logo of block elements from a fallback font, then text: as a
+        // terminal draws Claude Code's banner.
+        let line = TerminalLine::new(vec![
+            TerminalRun::new(" \u{2590}\u{259B}\u{2588}", red()),
+            TerminalRun::new("  Code \u{00B7} \u{2500}x", plain),
+        ]);
+        // Cells 8 wide; the fallback draws the blocks 9.5 wide, the middle
+        // dot and the rule a cell wide.
+        let advance = |g: &str| match g {
+            "\u{2590}" | "\u{259B}" | "\u{2588}" => 9.5,
+            _ => 8.0,
+        };
+        assert_eq!(
+            texts(&segments(&line, 8.0, advance)),
+            [
+                (0.0, 0.0, " ".into()),
+                // Columns 1 to 3, each block 1.5 narrower spaced, half of
+                // it before.
+                (8.0 - 0.75, -1.5, "\u{2590}\u{259B}\u{2588}".into()),
+                // The text after them starts at its column, 4.
+                (32.0, 0.0, "  Code \u{00B7} \u{2500}x".into()),
+            ]
+        );
     }
 
     #[test]
