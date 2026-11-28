@@ -198,7 +198,7 @@ pub(super) struct Blocks {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum PendingScroll {
     By(f32),
-    To(f32),
+    To { offset: f32, animated: bool },
 }
 
 /// Where the platform's reported `offset` ends up once the `pending`
@@ -208,7 +208,26 @@ pub(super) fn replay(offset: f32, pending: &[(u32, PendingScroll)]) -> f32 {
     for &(_, scroll) in pending {
         match scroll {
             PendingScroll::By(d) => at += d,
-            PendingScroll::To(t) => at = t,
+            PendingScroll::To { offset: to, .. } => at = to,
+        }
+    }
+    at
+}
+
+/// Where the platform's reported `offset` shows the content once the
+/// instant `pending` scrolls are applied with the batch. An animated
+/// `ScrollTo` not applied yet has not moved the content: its movement is
+/// the offsets the platform reports while it runs.
+pub(super) fn replay_shown(offset: f32, pending: &[(u32, PendingScroll)]) -> f32 {
+    let mut at = offset;
+    for &(_, scroll) in pending {
+        match scroll {
+            PendingScroll::By(d) => at += d,
+            PendingScroll::To {
+                offset: to,
+                animated: false,
+            } => at = to,
+            PendingScroll::To { animated: true, .. } => {}
         }
     }
     at
@@ -386,8 +405,12 @@ pub(super) struct ListState {
     pub(super) revealing: bool,
     /// `loadMoreAtStartThreshold`, in viewports.
     pub(super) start_threshold: f32,
-    /// Main-axis scroll offset reported by the platform (content
-    /// coordinates).
+    /// Main-axis offset the list's window is at, in content coordinates:
+    /// the platform's reports, the jumps the core sent at once, and the
+    /// targets its pending scrolls replay over reports that predate them.
+    /// During an animated scroll this can be where the animation goes
+    /// before the platform gets there; what the content shows meanwhile is
+    /// `Core::content_offset`'s.
     pub(super) offset: f32,
     /// Main-axis size of the list viewport (from layout).
     pub(super) viewport: f32,
@@ -986,9 +1009,10 @@ impl ListState {
     }
 
     /// Records a `ScrollTo` sent to the platform.
-    pub(super) fn issue_scroll_to(&mut self, offset: f32) {
+    pub(super) fn issue_scroll_to(&mut self, offset: f32, animated: bool) {
         self.issued += 1;
-        self.pending.push((self.issued, PendingScroll::To(offset)));
+        self.pending
+            .push((self.issued, PendingScroll::To { offset, animated }));
     }
 
     /// The platform reports its offset after applying `applied` of the
@@ -998,6 +1022,12 @@ impl ListState {
         self.pending.retain(|&(n, _)| n > applied);
         let at = replay(offset, &self.pending);
         self.moved_to(at, self.pending.is_empty());
+    }
+
+    /// Where `reported`, the platform's last reported offset, shows the
+    /// content once the instant scrolls it does not count yet are applied.
+    pub(super) fn shown_offset(&self, reported: f32) -> f32 {
+        replay_shown(reported, &self.pending)
     }
 
     /// No scroll the core issued is waiting for the platform.
@@ -3126,7 +3156,7 @@ mod tests {
         // Reported before the platform applied the shift.
         l.reported(500.0, 0);
         assert_eq!(l.offset, 530.0);
-        l.issue_scroll_to(1000.0);
+        l.issue_scroll_to(1000.0, false);
         l.reported(531.0, 1);
         assert_eq!(l.offset, 1000.0);
         l.reported(1002.0, 2);
@@ -3575,10 +3605,35 @@ mod tests {
     }
 
     #[test]
+    fn shown_offsets_replay_only_instant_pending_scrolls_in_order() {
+        let pending = vec![
+            (1, PendingScroll::By(20.0)),
+            (
+                2,
+                PendingScroll::To {
+                    offset: 700.0,
+                    animated: false,
+                },
+            ),
+            (3, PendingScroll::By(5.0)),
+            (
+                4,
+                PendingScroll::To {
+                    offset: 900.0,
+                    animated: true,
+                },
+            ),
+            (5, PendingScroll::By(30.0)),
+        ];
+        assert_eq!(replay(100.0, &pending), 930.0);
+        assert_eq!(replay_shown(100.0, &pending), 735.0);
+    }
+
+    #[test]
     fn an_animated_pin_ends_when_the_list_moves_away_from_it() {
         let mut l = list(100, 50.0, 400.0);
         l.pin(Some(PinTarget::End), 4600.0, true);
-        l.issue_scroll_to(4600.0);
+        l.issue_scroll_to(4600.0, true);
         l.reported(3000.0, 1);
         l.reported(3500.0, 1);
         // Rows above measured: the web moves only where the animation
@@ -3601,10 +3656,10 @@ mod tests {
         // An animated scroll to the end: retargeted when the end moves,
         // corrected once it landed.
         l.pin(Some(PinTarget::End), 4600.0, true);
-        l.issue_scroll_to(4600.0);
+        l.issue_scroll_to(4600.0, true);
         l.measured(99, 90.0);
         assert_eq!(l.follow_pin(0.0), Follow::To(4640.0));
-        l.issue_scroll_to(4640.0);
+        l.issue_scroll_to(4640.0, true);
         l.reported(3000.0, 2);
         assert!(l.pinned(), "in flight");
         l.reported(4640.0, 2);

@@ -362,8 +362,12 @@ misses the deadline is not waited for again until it catches up (`docs/dev/macos
   coordinates of touches' `pageX` / `pageY`, so `e.pageX - m.pagePosition.x` is a touch's position in the measured view whatever
   view the finger went down on (`locationX` is relative to that one). The core answers it from its layout
   (`Command::Measure`, `Core::measure`: the frames it mounted, summed up the tree), never by asking the platform: the
-  scroll views and lists around subtract their content offsets (as the platforms last reported them, `set_scroll_offset`)
-  and apply their zoom scales; transforms, native animations included, are not applied, nor is the mirroring of
+  scroll views and lists around subtract the content offset shown with the batch (`Core::content_offset`). That is the
+  platform's latest report; for a list, or the scroll view around a `viewport="parent"` list, it also counts the instant
+  scrolls the core sends or queues with the batch — keeping rows in place as rows above them measure, following the end
+  through a resize, or scrolling that surrounding view — while an animated scroll counts as the platform reports its
+  progress, not at its destination before it gets there. Both apply their zoom scales;
+  transforms, native animations included, are not applied, nor is the mirroring of
   right-to-left horizontal lists (scaleX −1). The answer settles the promise from the core's events
   (`JsEvent::Reply`), like a module call's (`nsh-js` `components.rs`). There is no `measureInWindow`: the root view is the window for a full-screen surface, and
   an embedding app knows where it put the surface.

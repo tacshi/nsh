@@ -4179,7 +4179,7 @@ impl<M: TextEngine> Core<M> {
                 _ => {}
             }
             // Platforms count the scrolls they applied; lists count theirs.
-            if let Command::ScrollTo { x, y, .. } = command
+            if let Command::ScrollTo { x, y, animated } = command
                 && self.nodes[key as usize].kind == Kind::Scroll
             {
                 let horizontal = self.nodes[key as usize]
@@ -4187,7 +4187,13 @@ impl<M: TextEngine> Core<M> {
                     .as_ref()
                     .is_some_and(|s| s.horizontal);
                 let to = if horizontal { x.0 } else { y.0 };
-                self.scroll_issued(key, PendingScroll::To(to));
+                self.scroll_issued(
+                    key,
+                    PendingScroll::To {
+                        offset: to,
+                        animated,
+                    },
+                );
                 if let Some(scroll) = self.nodes[key as usize].scroll.as_mut() {
                     scroll.target = Some((scroll.issued, (x.0, y.0)));
                 }
@@ -11469,7 +11475,7 @@ impl<M: TextEngine> Core<M> {
                 outer_to = Some((o.start + offset, animated));
                 continue;
             }
-            scrolls_to.push(offset);
+            scrolls_to.push((offset, animated));
             let (x, y) = if horizontal {
                 (Points(offset), Points::ZERO)
             } else {
@@ -11492,7 +11498,7 @@ impl<M: TextEngine> Core<M> {
         if let (Some(offset), Some(o)) = (retarget, &outer) {
             outer_to = Some((o.start + offset, true));
         } else if let Some(offset) = retarget {
-            scrolls_to.push(offset);
+            scrolls_to.push((offset, true));
             let (x, y) = if horizontal {
                 (Points(offset), Points::ZERO)
             } else {
@@ -11802,8 +11808,8 @@ impl<M: TextEngine> Core<M> {
         if anchor != 0.0 {
             list.issue_scroll_by(anchor);
         }
-        for offset in scrolls_to {
-            list.issue_scroll_to(offset);
+        for (offset, animated) in scrolls_to {
+            list.issue_scroll_to(offset, animated);
         }
         let scroll_by = (anchor != 0.0).then(|| {
             let (dx, dy) = if horizontal {

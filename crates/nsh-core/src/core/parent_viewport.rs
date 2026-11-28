@@ -51,6 +51,24 @@ pub(super) struct Asked {
     by: f32,
 }
 
+impl Asked {
+    /// Where `at` ends up with the asked scroll applied.
+    pub(super) fn target(&self, at: f32) -> f32 {
+        let at = self.to.map_or(at, |(to, _)| to);
+        at + self.by
+    }
+
+    /// Where `at` shows once the instant asked scroll is applied: an
+    /// animated scroll not applied yet has not moved the content.
+    pub(super) fn shown(&self, at: f32) -> f32 {
+        let at = match self.to {
+            Some((to, false)) => to,
+            _ => at,
+        };
+        at + self.by
+    }
+}
+
 /// What a parent-viewport list is virtualized against in this update.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OuterInput {
@@ -58,7 +76,7 @@ pub(super) struct OuterInput {
     pub(super) view: Key,
     /// Where the list's content starts in the view's content.
     pub(super) start: f32,
-    /// The view's offset, its pending scrolls included.
+    /// The offset the view's scrolls go to, its pending scrolls included.
     pub(super) offset: f32,
     /// Its viewport's size.
     pub(super) viewport: f32,
@@ -93,22 +111,18 @@ fn spacer_style(horizontal: bool, len: f32) -> taffy::Style {
     }
 }
 
-/// The main-axis offset of a plain scroll view: the reported one with the
-/// scrolls not applied yet and the ones asked this commit.
+/// The main-axis offset a plain scroll view's lists virtualize against:
+/// the reported one with every scroll not applied yet (an animated one's
+/// target included, so the rows it goes to render) and the ones asked
+/// this commit. What shows meanwhile is `Core::content_offset`'s.
 fn scroll_offset(scroll: &ScrollState) -> f32 {
     let reported = if scroll.horizontal {
         scroll.offset.0
     } else {
         scroll.offset.1
     };
-    let mut at = replay(reported, &scroll.pending);
-    if let Some(asked) = &scroll.asked {
-        if let Some((to, _)) = asked.to {
-            at = to;
-        }
-        at += asked.by;
-    }
-    at
+    let at = replay(reported, &scroll.pending);
+    scroll.asked.as_ref().map_or(at, |asked| asked.target(at))
 }
 
 impl<M: TextEngine> Core<M> {
@@ -594,8 +608,14 @@ impl<M: TextEngine> Core<M> {
             };
             if let Some((to, animated)) = asked.to {
                 match node.list.as_mut() {
-                    Some(own) => own.issue_scroll_to(to),
-                    None => issue(scroll, PendingScroll::To(to)),
+                    Some(own) => own.issue_scroll_to(to, animated),
+                    None => issue(
+                        scroll,
+                        PendingScroll::To {
+                            offset: to,
+                            animated,
+                        },
+                    ),
                 }
                 let (x, y) = along(to);
                 self.mount.push(MountItem::Command {

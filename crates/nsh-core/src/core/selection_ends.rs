@@ -68,16 +68,12 @@ impl<M: TextEngine> TextTree for Nodes<'_, M> {
 
     fn content_offset(&self, &key: &Key) -> (Point<Points>, f32) {
         // The core's offset is in the zoomed content's points.
-        self.0.nodes[key as usize]
-            .scroll
-            .as_deref()
-            .map_or((Point::default(), 1.0), |s| {
-                let zoom = if s.zoom > 0.0 { s.zoom } else { 1.0 };
-                (
-                    point(Points(s.offset.0 / zoom), Points(s.offset.1 / zoom)),
-                    zoom,
-                )
-            })
+        let node = &self.0.nodes[key as usize];
+        node.scroll.as_deref().map_or((Point::default(), 1.0), |s| {
+            let zoom = if s.zoom > 0.0 { s.zoom } else { 1.0 };
+            let (x, y) = self.0.content_offset(s, node.list.as_deref());
+            (point(Points(x / zoom), Points(y / zoom)), zoom)
+        })
     }
 }
 

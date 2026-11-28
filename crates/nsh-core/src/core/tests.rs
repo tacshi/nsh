@@ -3768,6 +3768,18 @@ fn render_sized_binds(
     count
 }
 
+/// The node id of the cell list `id` has showing item `index`.
+fn cell_showing(c: &Core<FakeEngine>, id: NodeId, index: u32) -> NodeId {
+    let list = c.nodes[c.key(id).unwrap() as usize].list.as_ref().unwrap();
+    let slot = list
+        .slots
+        .iter()
+        .find(|slot| slot.index == Some(index))
+        .expect("the item is bound");
+    assert_ne!(slot.cell, u32::MAX, "the cell is made");
+    c.nodes[slot.cell as usize].id
+}
+
 #[test]
 fn list_renders_window_and_recycles_cells() {
     let mut c = core();
@@ -5132,6 +5144,300 @@ fn follow_end_animated_stops_when_the_user_scrolls_away() {
     c.set_scroll_offset(2, point(px(0.0), px(end - 200.0)), u32::MAX);
     c.commit();
     assert_eq!(last_row_resized(&mut c, last, 450.0), (vec![], vec![]));
+}
+
+/// A resize that moves the end of a list following it moves the rows on
+/// screen with the same commit. Measurement and anchored overlays read the
+/// coordinates of that commit, not the offset the platform had before the
+/// anchoring scroll it applies with the batch.
+#[test]
+fn measuring_a_list_row_follows_its_resize_anchor() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    assert_eq!(at, 100.0 * 50.0 - 480.0, "at the end");
+    let last = *cells
+        .iter()
+        .max_by(|&&a, &&b| {
+            let y = |id| c.nodes[c.key(id).unwrap() as usize].frame.origin.y.0;
+            y(a).total_cmp(&y(b))
+        })
+        .unwrap();
+    let before = c.measure(last).unwrap().page.y.0;
+
+    // An overlay anchored to the row reads the same coordinates.
+    add(&mut c, 900, Tag::Overlay, last, &[]);
+    add(
+        &mut c,
+        901,
+        Tag::View,
+        900,
+        &[
+            ("width", StyleValue::Number(120.0)),
+            ("height", StyleValue::Number(60.0)),
+        ],
+    );
+    apply(
+        &mut c,
+        vec![
+            overlay_prop(
+                900,
+                crate::OverlayProp::Anchor(crate::overlay::OverlayAnchor::Node(last)),
+            ),
+            overlay_prop(
+                900,
+                crate::OverlayProp::Placement(crate::overlay::Placement::Top),
+            ),
+            overlay_prop(900, crate::OverlayProp::Offset(px(4.0))),
+        ],
+    );
+    let batch = c.commit().expect("the overlay");
+    let overlay_before = frame_of(&batch, 900).unwrap().origin.y.0;
+    assert_eq!(overlay_before, before - 60.0 - 4.0);
+
+    c.apply(Op::Command {
+        id: last,
+        command: Command::Measure { call: 7 },
+    })
+    .unwrap();
+    c.set_viewport(size_pt(320.0, 300.0));
+    let batch = c.commit().expect("the resize");
+    let scroll_by: f32 = batch
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MountItem::ScrollBy { id: 2, dy, .. } => Some(dy.0),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(scroll_by, 180.0, "the shorter viewport moves the end");
+    let frame_y = c.nodes[c.key(last).unwrap() as usize].frame.origin.y.0;
+    // The batch grows the scroll offset by 180 before the platform reports
+    // it: the row is 180 points higher in the coordinates the commit mounts.
+    assert_eq!(
+        c.measure(last).unwrap().page.y.0,
+        frame_y - (at + scroll_by)
+    );
+    assert_eq!(c.measure(last).unwrap().page.y.0, before - scroll_by);
+    let answered = js_events(&mut c)
+        .into_iter()
+        .find_map(|(_, _, payload)| match payload {
+            EventPayload::Native { name, data } if &*name == "$return" && data["c"] == 7 => {
+                Some(data["v"].clone())
+            }
+            _ => None,
+        })
+        .expect("the measure answer");
+    assert_eq!(
+        answered["pagePosition"]["y"],
+        serde_json::json!(before - scroll_by),
+        "ref.measure() answers with the batch's coordinates"
+    );
+    assert_eq!(
+        frame_of(&batch, 900).unwrap().origin.y.0,
+        overlay_before - scroll_by,
+        "the anchored overlay follows the row in the same batch"
+    );
+
+    // A report made before the batch reaches the core after it: the
+    // instant anchoring scroll it does not count still applies.
+    c.set_scroll_offset(2, point(px(0.0), px(at)), 0);
+    c.commit();
+    assert_eq!(c.measure(last).unwrap().page.y.0, before - scroll_by);
+
+    // Once the platform's report arrives the answer is unchanged.
+    c.set_scroll_offset(2, point(px(0.0), px(at + scroll_by)), u32::MAX);
+    assert_eq!(c.measure(last).unwrap().page.y.0, before - scroll_by);
+}
+
+/// An animated scroll's target is where the list's window goes, not
+/// where the rows show. Measurement and anchored overlays follow the
+/// offset the platform reports until the animation moves it.
+#[test]
+fn measuring_a_list_row_does_not_jump_to_an_animated_scrolls_target() {
+    let mut c = core();
+    estimated_list(&mut c);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    let end = 100.0 * 50.0 - 400.0;
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollTo {
+            x: Points::ZERO,
+            y: Points(end - 120.0),
+            animated: false,
+        },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    assert_eq!(at, end - 120.0, "near the end");
+    let row = cell_showing(&c, 2, 95);
+    let before = c.measure(row).unwrap().page.y.0;
+    assert_eq!(before, 95.0 * 50.0 - at);
+
+    add(&mut c, 900, Tag::Overlay, row, &[]);
+    add(
+        &mut c,
+        901,
+        Tag::View,
+        900,
+        &[
+            ("width", StyleValue::Number(120.0)),
+            ("height", StyleValue::Number(60.0)),
+        ],
+    );
+    apply(
+        &mut c,
+        vec![
+            overlay_prop(
+                900,
+                crate::OverlayProp::Anchor(crate::overlay::OverlayAnchor::Node(row)),
+            ),
+            overlay_prop(
+                900,
+                crate::OverlayProp::Placement(crate::overlay::Placement::Top),
+            ),
+            overlay_prop(900, crate::OverlayProp::Offset(px(4.0))),
+        ],
+    );
+    let batch = c.commit().expect("the overlay");
+    let overlay_before = frame_of(&batch, 900).unwrap().origin.y.0;
+    assert_eq!(overlay_before, before - 60.0 - 4.0);
+
+    // 120 pt on to the end, animated. Until the platform reports the
+    // animation moving, the row and the overlay are where they were.
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: true },
+    })
+    .unwrap();
+    let batch = c.commit().expect("the scroll");
+    assert!(batch.items.iter().any(|item| matches!(
+        item,
+        MountItem::Command {
+            id: 2,
+            command: Command::ScrollTo { animated: true, .. }
+        }
+    )));
+    assert_eq!(c.measure(row).unwrap().page.y.0, before);
+
+    // A report made before the command reaches the core after it. It does
+    // not count the animated scroll, whose target the list's window already
+    // goes to; what shows has not jumped there.
+    c.set_scroll_offset(2, point(px(0.0), px(at)), 0);
+    if let Some(batch) = c.commit() {
+        assert_eq!(frame_of(&batch, 900), None);
+    }
+    assert_eq!(c.measure(row).unwrap().page.y.0, before);
+    assert_eq!(
+        c.nodes[c.key(900).unwrap() as usize].frame.origin.y.0,
+        overlay_before
+    );
+
+    // The animation reports its progress: measurement follows that.
+    c.set_scroll_offset(2, point(px(0.0), px(at + 40.0)), u32::MAX);
+    let batch = c.commit().expect("the animation's progress");
+    assert_eq!(c.measure(row).unwrap().page.y.0, before - 40.0);
+    assert_eq!(
+        frame_of(&batch, 900).unwrap().origin.y.0,
+        overlay_before - 40.0
+    );
+}
+
+/// Hit testing uses the same committed scroll position as measurement:
+/// an instant list scroll is inverted at once, including when a report
+/// made before it arrives afterwards.
+#[test]
+fn hit_testing_a_list_row_follows_its_instant_scroll() {
+    let mut c = core();
+    estimated_list(&mut c);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    let row = cell_showing(&c, 2, 2);
+    apply(
+        &mut c,
+        vec![Op::Listen {
+            id: row,
+            event: EventKind::Press,
+            enabled: true,
+        }],
+    );
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollTo {
+            x: Points::ZERO,
+            y: px(100.0),
+            animated: false,
+        },
+    })
+    .unwrap();
+    c.commit();
+    assert_eq!(c.measure(row).unwrap().page.y.0, 0.0);
+    assert_eq!(
+        c.press_target(2, point(px(10.0), px(25.0))),
+        Some((row, point(px(10.0), px(25.0))))
+    );
+    c.set_scroll_offset(2, point(px(0.0), px(0.0)), 0);
+    c.commit();
+    assert_eq!(
+        c.press_target(2, point(px(10.0), px(25.0))),
+        Some((row, point(px(10.0), px(25.0))))
+    );
 }
 
 #[test]
@@ -39402,6 +39708,63 @@ fn scroll_to_index_in_a_page_scrolls_the_page_within_its_content() {
     assert_eq!(page_scrolls(&batch), [(true, 4700.0)]);
 }
 
+/// A list in its parent's viewport scrolls with the plain scroll view
+/// around it. Measurement counts the instant scroll the list asked for in
+/// the batch, before the platform's report of it comes back.
+#[test]
+fn measuring_a_page_list_row_follows_the_pages_instant_scroll() {
+    let mut c = core();
+    page(&mut c, 100.0, &[100]);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    let row = cell_showing(&c, 4, 10);
+    assert_eq!(c.measure(row).unwrap().page.y.0, 600.0);
+
+    c.apply(Op::Command {
+        id: row,
+        command: Command::Measure { call: 9 },
+    })
+    .unwrap();
+    c.apply(Op::Command {
+        id: 4,
+        command: Command::ScrollToIndex {
+            index: 10,
+            animated: false,
+            view_position: crate::geometry::Percentage(0.0),
+            view_offset: px(0.0),
+        },
+    })
+    .unwrap();
+    let batch = c.commit().expect("the scroll");
+    assert_eq!(page_scrolls(&batch), [(true, 600.0)]);
+    assert_eq!(c.measure(row).unwrap().page.y.0, 0.0);
+    let answered = js_events(&mut c)
+        .into_iter()
+        .find_map(|(_, _, payload)| match payload {
+            EventPayload::Native { name, data } if &*name == "$return" && data["c"] == 9 => {
+                Some(data["v"].clone())
+            }
+            _ => None,
+        })
+        .expect("the measure answer");
+    assert_eq!(
+        answered["pagePosition"]["y"],
+        serde_json::json!(0.0),
+        "ref.measure() answers with the batch's coordinates"
+    );
+
+    // A report made before the scroll reaches the core after it: the
+    // instant `ScrollTo` it does not count still applies.
+    c.set_scroll_offset(2, point(px(0.0), px(0.0)), 0);
+    c.commit();
+    assert_eq!(c.measure(row).unwrap().page.y.0, 0.0);
+    c.set_scroll_offset(2, point(px(0.0), px(600.0)), u32::MAX);
+    c.commit();
+    assert_eq!(c.measure(row).unwrap().page.y.0, 0.0);
+}
+
 #[test]
 fn the_viewport_is_fixed_when_the_list_is_made() {
     let mut c = core();
@@ -45500,6 +45863,127 @@ fn a_follower_follows_a_row_of_a_list_where_the_list_scrolled_it() {
     c.set_scroll_offset(20, point(px(0.0), px(0.0)), u32::MAX);
     let batch = c.commit().unwrap();
     assert_eq!(frame_of(&batch, 8), Some(rect(0.0, 200.0, 3.0, 20.0)));
+}
+
+/// A follower outside a list reads the same committed coordinates as
+/// measurement and overlays when a resize anchors the list with an instant
+/// scroll in the same batch.
+#[test]
+fn a_follower_follows_a_row_through_the_lists_resize_anchor() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            style_op(
+                3,
+                &[
+                    ("flexGrow", StyleValue::Number(1.0)),
+                    ("flexDirection", StyleValue::Str("column")),
+                ],
+            ),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 8,
+                tag: Tag::View,
+            },
+            style_op(
+                8,
+                &[
+                    ("position", StyleValue::Str("absolute")),
+                    ("left", StyleValue::Number(0.0)),
+                    ("width", StyleValue::Number(3.0)),
+                ],
+            ),
+            Op::Insert {
+                parent: 3,
+                child: 8,
+                before: None,
+            },
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: 3,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    assert_eq!(at, 100.0 * 50.0 - 480.0, "at the end");
+    let last = *cells
+        .iter()
+        .max_by(|&&a, &&b| {
+            let y = |id| c.nodes[c.key(id).unwrap() as usize].frame.origin.y.0;
+            y(a).total_cmp(&y(b))
+        })
+        .unwrap();
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 8,
+            prop: Prop::Follow(Some(crate::element::FollowTarget::of_node(last))),
+        }],
+    );
+    let batch = c.commit().expect("the follower");
+    let before = frame_of(&batch, 8).unwrap();
+    assert_eq!(before, rect(0.0, 430.0, 3.0, 50.0));
+
+    c.set_viewport(size_pt(320.0, 300.0));
+    let batch = c.commit().expect("the resize");
+    let scroll_by: f32 = batch
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MountItem::ScrollBy { id: 2, dy, .. } => Some(dy.0),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(scroll_by, 180.0);
+    assert_eq!(
+        frame_of(&batch, 8).unwrap().origin.y.0,
+        before.origin.y.0 - scroll_by,
+        "the follower moves with the row in the resize batch"
+    );
 }
 
 #[test]
@@ -57947,4 +58431,106 @@ fn a_tab_bar_makes_every_tab_added_in_one_turn_over_frames() {
             assert!(made.contains(&id), "tab {i} view {n} was never made");
         }
     }
+}
+
+/// `cargo test -p nsh-core --release bench_measure_list_row -- --ignored --nocapture`
+///
+/// The coordinate conversion of a row inside a virtualized list, once with
+/// no scrolls in flight and once with an instant scroll's report still
+/// outstanding. Compile it on both sides of a measurement change and
+/// alternate the runs.
+#[test]
+#[ignore]
+fn bench_measure_list_row() {
+    use std::{hint::black_box, time::Instant};
+
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    let last = *cells
+        .iter()
+        .max_by(|&&a, &&b| {
+            let y = |id| c.nodes[c.key(id).unwrap() as usize].frame.origin.y.0;
+            y(a).total_cmp(&y(b))
+        })
+        .unwrap();
+    assert!(c.measure(last).is_some(), "the row is placed");
+
+    let iterations = 200_000u32;
+    let run = |c: &Core<FakeEngine>, label: &str| {
+        let mut samples = [std::time::Duration::ZERO; 7];
+        for sample in &mut samples {
+            let start = Instant::now();
+            for _ in 0..iterations {
+                black_box(black_box(c).measure(black_box(last)));
+            }
+            *sample = start.elapsed() / iterations;
+        }
+        samples.sort_unstable();
+        eprintln!(
+            "measure {label}: min / median {} / {} ns",
+            samples[0].as_nanos(),
+            samples[3].as_nanos(),
+        );
+    };
+
+    // Steady state: every scroll's report is in, nothing pending.
+    run(&c, "settled");
+
+    // An instant scroll whose report is still in flight: the window the
+    // shown-offset pipeline serves.
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollTo {
+            x: px(0.0),
+            y: px(0.0),
+            animated: false,
+        },
+    })
+    .unwrap();
+    c.commit();
+    run(&c, "in-flight");
 }

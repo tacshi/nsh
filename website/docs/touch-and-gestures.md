@@ -432,7 +432,7 @@ view()
     .on_responder_move(move |e: &ResponderEvent| seek(e.page.x - origin.get()))
 ```
 
-It resolves once the changes made so far are laid out: in Rust to a `Measurement` (`frame`, the frame in the parent as the layout handler reports it, and `page`, the top left corner), in TSX to `{ bounds, pagePosition }`. The corner is in the surface, or in the dialog the view is in, the same coordinates as touches' page positions. The offsets of the scroll views and lists around it are taken into account; transforms (animations included) are not. It resolves to `None` / `null` for a view that is not on screen.
+It resolves once the changes made so far are laid out: in Rust to a `Measurement` (`frame`, the frame in the parent as the layout handler reports it, and `page`, the top left corner), in TSX to `{ bounds, pagePosition }`. The corner is in the surface, or in the dialog the view is in, the same coordinates as touches' page positions. The offsets of the scroll views and lists around it are taken into account as the content shows with that layout: for a list, or the scroll view around a `viewport="parent"` list, an instant scroll sent with the same update counts at once, while an animated one counts as the platform reports its progress. Transforms (animations included) are not taken into account. It resolves to `None` / `null` for a view that is not on screen.
 
 ## The responder system
 

@@ -14,9 +14,11 @@
 //! places it again in the same batch. The element may be anywhere inside
 //! the view's parent, in a list's row too; its frame there is the frames
 //! summed up to the parent, a list cell's being where its list placed it.
-//! A scroll view or list in between counts as the platform last reported
-//! it scrolled, and only the part of the element its viewport shows is
-//! followed (none: the view follows nothing). A report that moved one
+//! A scroll view or list in between counts as the offset its content
+//! shows in the commit: the platform's latest report plus the instant
+//! scrolls the core sends with the batch, while an animated scroll counts
+//! as the platform reports its progress. Only the part of the element its
+//! viewport shows is followed (none: the view follows nothing). A report that moved one
 //! places the views again in the commit after it, so a view outside what
 //! scrolls follows it a frame or so behind; one in the same content as the
 //! element (a child of the scroll view) is moved with it natively. A list
@@ -215,7 +217,12 @@ impl<M: TextEngine> Core<M> {
             if let Some(scroll) = n.scroll.as_deref()
                 && !n.list.as_ref().is_some_and(|l| l.parent)
             {
-                frame = shown(frame, scroll.offset, scroll.zoom, n.frame.size)?;
+                frame = shown(
+                    frame,
+                    self.content_offset(scroll, n.list.as_deref()),
+                    scroll.zoom,
+                    n.frame.size,
+                )?;
             }
             frame.origin += n.frame.origin;
             k = n.parent;
