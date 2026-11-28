@@ -341,3 +341,65 @@ test('a press on a text field or around it reaches its input after the focus a t
     assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('a tap on selectable text keeps the focus its press gave a field', { skip: !chromium }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nsh-touch-browser-'));
+  try {
+    const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
+    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { Player };').toString('base64');
+    await writeFile(join(dir, 'index.html'), `<!doctype html><style>body { margin:0; } #app { width:300px; height:200px; }</style>
+    <div id="app"></div>
+    <script type="module">
+      import { Player } from '${module}';
+      const check = (ok, message) => { if (!ok) throw Error(message); };
+      try {
+        const p = new Player(document.querySelector('#app'), { history: false });
+        p.size = [300, 200];
+        p.wasm = new Proxy({}, { get: () => () => -1 });
+        p.call = (f) => f(p.wasm);
+        p.updateRuns = () => true;
+        // A terminal: a pressable box of selectable rows, whose press focuses the input that takes its keys.
+        p.event = (id, name) => { if (id === 2 && name === 'onPress') p.op_cmd(['cmd', 3, 'focus']); };
+        p.installInput();
+        p.op_c(['c', 2, 'view']);
+        p.root.append(p.view(2));
+        p.op_f(['f', 2, 0, 0, 300, 200]);
+        p.op_e(['e', 2, ['onPress']]);
+        p.op_c(['c', 4, 'view']);
+        p.op_i(['i', 2, 4, null]);
+        p.op_f(['f', 4, 0, 0, 300, 18]);
+        p.op_t(['t', 4, 0, 0, 0, 0, [[0, 0, 'user@host ~ %', 0, 0]], [], true, null]);
+        p.op_c(['c', 3, 'view']);
+        p.op_i(['i', 2, 3, null]);
+        p.op_f(['f', 3, 120, 0, 1, 18]);
+        p.op_in(['in', 3, { multiline: false, placeholder: '', editable: true, autoCapitalize: 'none' }, null]);
+        const row = p.view(4), field = p.view(3)._field;
+        check(row.classList.contains('nsh-selectable'), 'selectable: ' + row.className);
+        const pointer = (type) => row.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true,
+          pointerId: 1, isPrimary: true, pointerType: 'touch', button: 0, buttons: type === 'pointerup' ? 0 : 1,
+          clientX: 40, clientY: 9 }));
+        const mouse = (type) => row.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0,
+          buttons: type === 'mousedown' ? 1 : 0, clientX: 40, clientY: 9 }));
+
+        // The finger lifts: the press focuses the input.
+        pointer('pointerdown');
+        pointer('pointerup');
+        mouse('click');
+        check(document.activeElement === field, 'focused by the press: ' + document.activeElement?.tagName);
+        // The mousedown the browser makes of the tap keeps that focus, though the row is selectable.
+        check(!mouse('mousedown'), 'the mousedown of the tap moves the focus');
+
+        // A mouse press on the row is the browser's: it starts a selection there.
+        pointer('pointerdown');
+        p.lastPointer = 'mouse';
+        check(mouse('mousedown'), 'a click on selectable text keeps its default');
+        document.body.dataset.result = 'passed';
+      } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
+    </script>`);
+    const html = execFileSync(chromium, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--virtual-time-budget=5000',
+      '--user-data-dir=' + join(dir, 'profile'), '--dump-dom', pathToFileURL(join(dir, 'index.html')).href],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000, maxBuffer: 1024 * 1024 });
+    assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

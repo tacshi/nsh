@@ -10548,6 +10548,16 @@ class Player {
    * text): the mouse events the browser makes of the touch would take the
    * focus to the pressable, and close the keyboard as it opens. */
   mouseDown(e) {
+    // A tap whose press focused a field (a focus command or `autoFocus`,
+    // `pressFocus`) keeps it, wherever the finger was: the mousedown the
+    // browser makes of the tap would move the focus to the view tapped,
+    // selectable text too (a terminal's rows), and the keyboard the focus
+    // raised would close as it opens. A tap on another field takes it.
+    if (this.lastPointer === "touch" && this.pressFocus && this.pressFocus === document.activeElement
+        && !e.target?.closest?.(".nsh-field")) {
+      e.preventDefault();
+      return;
+    }
     if (this.editable(e.target)) return;
     // A press on an input around its field (its padding) is the field's,
     // as on Linux and Windows: it takes the focus there, from a click as it
