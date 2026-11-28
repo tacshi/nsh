@@ -809,7 +809,8 @@ fn sink(
     cell_width: Memo<Points>,
     lh: impl Fn() -> Points + 'static,
 ) -> impl IntoElement {
-    let (change, compose, paste, focus, blur) = (
+    let (change, compose, paste, focus, blur, submit) = (
+        term.clone(),
         term.clone(),
         term.clone(),
         term.clone(),
@@ -859,11 +860,17 @@ fn sink(
         .auto_correct(false)
         .auto_capitalize(AutoCapitalize::None)
         .paste_behavior(PasteBehavior::Report)
+        // A software keyboard's return (Android's editor action, iOS's
+        // return key) submits the input rather than pressing Enter: it is
+        // the program's Enter, and the keyboard stays. A hardware Enter is
+        // the key binding's, which takes it before the input submits.
+        .submit_behavior(SubmitBehavior::Submit)
         .value(String::new())
         .label(move || props.accessibility_label.get().unwrap_or_default())
         .on_change(move |text: &str| change.sink_changed(text))
         .on_composition_change(move |c: &Composition| compose.sink_composed(c))
         .on_paste(move |p: &PasteEvent| paste.paste(&p.text))
+        .on_submit(move |_: &str| submit.send("\r"))
         .on_focus(move || focus.focused.set(true))
         .on_blur(move || blur.focused.set(false))
 }

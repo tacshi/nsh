@@ -363,3 +363,26 @@ fn typing_sends_each_character_and_a_composition_without_a_commit_nothing() {
     app.type_text("label:Shell", " -a").unwrap();
     assert_eq!(sent(&mut app), record(&["l", "s", " ", "-", "a"]));
 }
+
+/// A software keyboard's return submits the hidden input (Android's editor
+/// action, iOS's return key) instead of pressing Enter: the program gets
+/// its Enter, as from the key.
+#[test]
+fn a_software_keyboards_return_is_the_programs_enter() {
+    let mut app = start("$ abc");
+    app.type_text("label:Shell", "ls").unwrap();
+    let mut sink = Sink::of(&app);
+    sink.count += 2;
+    app.engine().control().dispatch_event(
+        sink.id,
+        EventKind::SubmitEditing,
+        EventPayload::Text {
+            text: "ls".to_owned(),
+            count: sink.count,
+        },
+    );
+    assert_eq!(sent(&mut app), record(&["l", "s", "\r"]));
+    // Enter on a hardware keyboard is the key binding's, once.
+    app.press_key("enter").unwrap();
+    assert_eq!(sent(&mut app), record(&["l", "s", "\r", "\r"]));
+}
