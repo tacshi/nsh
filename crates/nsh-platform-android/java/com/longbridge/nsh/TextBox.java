@@ -168,6 +168,19 @@ final class TextBox extends android.view.ViewGroup implements Node {
         invalidate();
     }
 
+    /**
+     * The taps of selectable text that does not listen to them itself: as on
+     * the Web and iOS, a tap goes on to the nearest box outwards that listens
+     * to taps (a pressable row, a terminal), and a long press that selects
+     * cancels that box's press.
+     */
+    private final Box.LongOnly taps = new Box.LongOnly(this);
+
+    private void forwardTaps(android.view.MotionEvent e, boolean selecting) {
+        if (selecting) taps.longPressed();
+        else taps.forward(e, press != null && mounter.handlesTap(id), mounter);
+    }
+
     /** Hands the touch to the press listeners, or cancels their press once a selection took over. */
     private void forwardPress(android.view.MotionEvent e, boolean selecting) {
         if (press == null) return;
@@ -191,10 +204,12 @@ final class TextBox extends android.view.ViewGroup implements Node {
         }
         if (areaGesture != null) {
             forwardPress(e, areaGesture.selecting());
+            forwardTaps(e, areaGesture.selecting());
             return areaGesture.onTextTouch(this, e);
         }
         if (!selectable) return press != null && press.onTouchEvent(e);
         forwardPress(e, extending);
+        forwardTaps(e, extending);
         switch (e.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
                 downX = e.getX();
