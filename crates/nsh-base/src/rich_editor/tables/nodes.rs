@@ -31,7 +31,8 @@ fn extra(role: TableRole) -> Attrs {
 /// The table's options its spec reads (the `table` extension's): `HTMLAttributes`
 /// written on `<table>`, `cellMinWidth` (25) for the `min-width` of columns
 /// without a width, and what the view reads from the spec's `extra`:
-/// `resizable` (true), `lastColumnResizable` (true) and `cellMinWidth`.
+/// `resizable` (true), `lastColumnResizable` (true), `fullWidth` (false)
+/// and `cellMinWidth`.
 pub fn table(options: &Value) -> (String, NodeSpec) {
     let cell_min_width = options
         .get("cellMinWidth")
@@ -46,7 +47,11 @@ pub fn table(options: &Value) -> (String, NodeSpec) {
     // The editor's view lays it out as a grid.
     extra.insert("render".into(), Value::from("table"));
     extra.insert("cellMinWidth".into(), Value::from(cell_min_width));
-    for (key, default) in [("resizable", true), ("lastColumnResizable", true)] {
+    for (key, default) in [
+        ("resizable", true),
+        ("lastColumnResizable", true),
+        ("fullWidth", false),
+    ] {
         let value = options.get(key).and_then(Value::as_bool).unwrap_or(default);
         extra.insert(key.into(), Value::Bool(value));
     }

@@ -673,7 +673,7 @@ editor.run(addRowAfter());
 ```
 
 The table takes the options `resizable` (true), `cellMinWidth` (25), `lastColumnResizable` (true),
-`allowTableNodeSelection` (false) and `HTMLAttributes`; `TableKit.configure({ tableHeader: false })` leaves one
+`allowTableNodeSelection` (false), `fullWidth` (false) and `HTMLAttributes`; `TableKit.configure({ tableHeader: false })` leaves one
 extension out. Cells hold blocks and have `colspan`, `rowspan` and `colwidth` (a width in points per column they
 span); rows have a `height`.
 
@@ -684,7 +684,9 @@ the selected cells, and delete the table when all its cells are selected.
 
 Columns fit the text and components in their cells. Long paragraphs wrap, and a table wider than the editor
 scrolls horizontally inside the document. A saved or dragged column width takes precedence. Each column is at
-least `cellMinWidth` wide and each row is at least its saved `height`. Its look starts from the theme: a
+least `cellMinWidth` wide and each row is at least its saved `height`. With `fullWidth: true` the table is at least
+as wide as the editor's text: the columns without a saved width share the room the others leave, and once every
+column has a width the last one takes that room, its saved width the least it gets. Its look starts from the theme: a
 1-point `border` grid, header cells on `muted`, padded cells, and each selected cell under the `selectedCell` part in
 the selection color. `classes.nodes` (`table`, `tableCell`, `tableHeader`) and the parts restyle
 all of it. Up and Down on a cell's first or last line go to the cell above or below.

@@ -4793,6 +4793,19 @@ covers [nsh/base] moveTableColumn
 covers [nsh/base] setColumnWidth
 covers [nsh/base] setRowHeight
 
+# base-rich-editor-table-full-width
+tap id:case-base-rich-editor-table-full-width
+# By default the columns fit their content: the table is narrower than the editor.
+frame parent:parent:parent:text:DefaultA 1 1 79 26
+frame parent:parent:parent:text:DefaultB 80 1 79 26
+# fullWidth: the columns without a width share the editor's 300 points.
+frame parent:parent:parent:text:SharedA 1 1 150 26
+frame parent:parent:parent:text:SharedB 151 1 149 26
+# fullWidth, every column sized: the first keeps its 80, the last takes the room left.
+frame parent:parent:parent:text:SizedA 1 1 80 26
+frame parent:parent:parent:text:SizedB 81 1 219 26
+covers [nsh/base] TableKit
+
 # base-rich-editor-extensions
 tap id:case-base-rich-editor-extensions
 tap text:RunExtensions

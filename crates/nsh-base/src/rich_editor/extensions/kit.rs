@@ -1118,8 +1118,10 @@ pub fn list_keymap() -> Extension {
 
 /// `table` (prosemirror-tables' table, as Tiptap's `Table`) with the
 /// options `HTMLAttributes` (written on `<table>`), `resizable` (true),
-/// `cellMinWidth` (25), `lastColumnResizable` (true) and
-/// `allowTableNodeSelection` (false): Tab and Shift-Tab between cells
+/// `cellMinWidth` (25), `lastColumnResizable` (true),
+/// `allowTableNodeSelection` (false) and `fullWidth` (false: true makes the
+/// table at least as wide as the editor's text, its columns without a width
+/// sharing the room, else its last column taking it): Tab and Shift-Tab between cells
 /// (Tab in the last cell adds a row), Backspace and Delete deleting the
 /// table when all its cells are selected, and the plugins repairing tables
 /// and editing in them (`tables::fix_tables_plugin`,
@@ -1133,6 +1135,7 @@ pub fn table() -> Extension {
             "cellMinWidth": 25,
             "lastColumnResizable": true,
             "allowTableNodeSelection": false,
+            "fullWidth": false,
         }))
         .add_keyboard_shortcuts(|_| table_keys())
         .add_plugins(|cx| {

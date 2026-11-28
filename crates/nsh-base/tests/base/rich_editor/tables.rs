@@ -4,7 +4,8 @@
 //! reports its row or column; dragged, it moves them and reports nothing.
 
 use nsh_base::rich_editor::{
-    extensions::{ExtensionManager, kit},
+    extensions::{Extension, ExtensionManager, kit},
+    tables::commands::set_column_width,
     view::RichEditorTableMenu,
 };
 use nsh_testing::{DragOptions, Screen};
@@ -35,7 +36,11 @@ fn table_session() -> EditorSession {
 }
 
 fn session_with_content(content: Value) -> EditorSession {
-    let manager = ExtensionManager::with_core(vec![kit::starter_kit(), kit::table_kit()]).unwrap();
+    session_with_kit(content, kit::table_kit())
+}
+
+fn session_with_kit(content: Value, tables: Extension) -> EditorSession {
+    let manager = ExtensionManager::with_core(vec![kit::starter_kit(), tables]).unwrap();
     let schema = manager.schema().clone();
     let doc = schema
         .node_from_json(&json!({"type": "doc", "content": content}))
@@ -105,6 +110,96 @@ fn top(screen: &Screen, text: &str) -> f32 {
         .unwrap_or_else(|| panic!("no text reads {text:?}"))
 }
 
+/// A one-row table of `s1`, `s2`, ... whose columns have the given widths.
+fn sized_row(widths: &[Option<u32>]) -> Value {
+    let names: Vec<String> = (1..=widths.len()).map(|i| format!("s{i}")).collect();
+    let row: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut t = table(&[&row]);
+    for (c, width) in t["content"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(widths)
+    {
+        if let Some(w) = width {
+            c["attrs"] = json!({"colwidth": [w]});
+        }
+    }
+    t
+}
+
+/// The harness showing `table` in an editor whose tables are `fullWidth`,
+/// once its last cell is laid out, and its session.
+fn full_width_app(table: Value) -> (Headless, EditorSession) {
+    let last = table["content"][0]["content"].as_array().unwrap().len();
+    let session = session_with_kit(
+        json!([table]),
+        kit::table_kit().configure(json!({"table": {"fullWidth": true}})),
+    );
+    let held = session.clone();
+    let mut config = EngineConfig {
+        viewport: Size::new(px(800.0), px(900.0)),
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Tables>(move || {
+            HarnessProps {
+                session: Some(session.clone()),
+            }
+        }))
+    };
+    // A desktop, where columns have resize handles.
+    config.environment.os = Os::Linux;
+    config.environment.idiom = Idiom::Desktop;
+    let mut app = Headless::start(config).unwrap();
+    app.wait_for(&format!("text:s{last}")).unwrap();
+    app.wait_until("the handles", Duration::from_secs(5), |s| {
+        column_bands(s).len() == last
+    })
+    .unwrap();
+    (app, held)
+}
+
+fn x_of(screen: &Screen, text: &str) -> f32 {
+    screen
+        .layout(&format!("text:{text}"))
+        .unwrap()
+        .unwrap()
+        .bounds
+        .left()
+        .0
+}
+
+fn table_frame(screen: &Screen) -> Bounds<Points> {
+    screen
+        .layout("id:rich-editor-table-scroll")
+        .unwrap()
+        .unwrap()
+        .bounds
+}
+
+/// The columns' resize bands, left to right: their views and bounds.
+fn column_bands(screen: &Screen) -> Vec<(String, Bounds<Points>)> {
+    let mut out: Vec<(String, Bounds<Points>)> = screen
+        .layout_nodes()
+        .iter()
+        .filter(|n| n.bounds.size.width.0 == 6.0 && n.bounds.size.height.0 != 6.0)
+        .map(|n| (format!("view:{}", n.id), n.bounds))
+        .collect();
+    out.sort_by(|a, b| a.1.origin.x.0.partial_cmp(&b.1.origin.x.0).unwrap());
+    out
+}
+
+/// The table's right edge: the middle of its last column's band.
+fn table_edge(screen: &Screen) -> f32 {
+    let (_, b) = column_bands(screen).pop().expect("no column band");
+    b.origin.x.0 + b.size.width.0 * 0.5
+}
+
+/// Drags column `col`'s resize band by `dx`.
+fn drag_band(app: &mut Headless, col: usize, dx: f32) {
+    let (band, _) = column_bands(app.screen()).swap_remove(col);
+    app.drag(&band, Point::new(px(dx), px(0.0)), DragOptions::default())
+        .unwrap();
+}
+
 #[test]
 fn table_columns_fit_their_content_and_scroll_without_moving_the_document() {
     let mut schedule = table(&[
@@ -172,6 +267,172 @@ fn table_columns_fit_their_content_and_scroll_without_moving_the_document() {
     .unwrap();
     assert_eq!(bounds(app.screen(), "text:Event schedule"), title);
     assert_eq!(held.state().doc().to_json(), original);
+}
+
+#[test]
+fn a_full_width_tables_columns_share_the_editors_width_and_wide_ones_still_scroll() {
+    let column_starts = |full: bool, rows: &[&[&str]]| {
+        let tables = if full {
+            kit::table_kit().configure(json!({"table": {"fullWidth": true}}))
+        } else {
+            kit::table_kit()
+        };
+        let session = session_with_kit(json!([table(rows)]), tables);
+        let mut app = Headless::start(EngineConfig {
+            viewport: Size::new(px(800.0), px(900.0)),
+            ..EngineConfig::new(nsh_testing::windowed_root_with::<Tables>(move || {
+                HarnessProps {
+                    session: Some(session.clone()),
+                }
+            }))
+        })
+        .unwrap();
+        let first = rows[0][0];
+        let last = rows[0][rows[0].len() - 1];
+        app.wait_for(&format!("text:{last}")).unwrap();
+        let s = app.screen();
+        let left = |text: &str| {
+            s.layout(&format!("text:{text}"))
+                .unwrap()
+                .unwrap()
+                .bounds
+                .left()
+                .0
+        };
+        let frame = s
+            .layout("id:rich-editor-table-scroll")
+            .unwrap()
+            .unwrap()
+            .bounds;
+        (left(first), left(last), frame.left().0, frame.right().0)
+    };
+
+    let short: &[&[&str]] = &[&["a1", "a2"], &["b1", "b2"]];
+    let (a1, a2, _, right) = column_starts(false, short);
+    assert!(
+        a2 - a1 < 100.0,
+        "columns fit their content by default: {a1} {a2}"
+    );
+    let (a1, a2, left, right_full) = column_starts(true, short);
+    assert_eq!(right, right_full);
+    let half = (right_full - left) / 2.0;
+    assert!(
+        (a2 - a1 - half).abs() < 2.0,
+        "two columns share the width evenly: {a1} {a2} of {left}..{right_full}"
+    );
+
+    let prose = "a long paragraph of ordinary words that wraps inside its cell rather than widening the table";
+    let (_, end, left, right) = column_starts(true, &[&[prose, "End"]]);
+    assert!(
+        end < right,
+        "a long paragraph wraps in a full-width table: {end} {left}..{right}"
+    );
+
+    let wide_first = |s: &Screen| x_of(s, "s2") - x_of(s, "s1");
+
+    // Every column sized: the table still spans the editor's text, the last
+    // column taking the room left, and the first keeps its width.
+    let (mut app, _) = full_width_app(sized_row(&[Some(100), Some(100)]));
+    let s = app.screen();
+    let (frame, edge) = (table_frame(s), table_edge(s));
+    assert!(
+        (wide_first(s) - 100.0).abs() < 1.0,
+        "saved widths are kept: {}",
+        wide_first(s)
+    );
+    assert!(
+        (edge - frame.right().0).abs() < 4.0,
+        "a fully sized table still spans the editor: edge {edge} of {frame:?}"
+    );
+
+    // Widening the first column takes the room from the last one.
+    drag_band(&mut app, 0, 50.0);
+    app.wait_until("the first column widens", Duration::from_secs(5), |s| {
+        (wide_first(s) - 150.0).abs() < 1.0
+    })
+    .unwrap();
+    assert!((table_edge(app.screen()) - frame.right().0).abs() < 4.0);
+
+    // Sizing the last column without a width (the last resize) keeps the
+    // table spanning the editor: it does not shrink to the columns' sum.
+    let (mut app, held) = full_width_app(sized_row(&[Some(100), None]));
+    let edge = table_edge(app.screen());
+    assert!((edge - frame.right().0).abs() < 4.0, "edge {edge}");
+    // What a resize of the last column runs when it is let go.
+    let command = set_column_width(Some(0), 1, Some(px(60.0)));
+    assert!(held.run(&command));
+    app.wait_until("the last column has a width", Duration::from_secs(5), |_| {
+        held.state().doc().to_json()["content"][0]["content"][0]["content"][1]["attrs"]
+            ["colwidth"]
+            == json!([60])
+    })
+    .unwrap();
+    app.wait(Duration::from_millis(100)).unwrap();
+    let edge = table_edge(app.screen());
+    assert!(
+        (edge - frame.right().0).abs() < 4.0,
+        "the table still spans the editor after its last resize: edge {edge} of {frame:?}"
+    );
+
+    // The last column stretched past its width into the room left: dragging
+    // it narrower shows nothing, so letting go saves nothing.
+    let (mut app, held) = full_width_app(sized_row(&[Some(100), Some(100)]));
+    let last_width = |held: &EditorSession| {
+        held.state().doc().to_json()["content"][0]["content"][0]["content"][1]["attrs"]["colwidth"]
+            [0]
+        .as_f64()
+        .unwrap()
+    };
+    let drawn = table_edge(app.screen()) - x_of(app.screen(), "s2");
+    drag_band(&mut app, 1, -30.0);
+    app.wait(Duration::from_millis(100)).unwrap();
+    assert_eq!(last_width(&held), 100.0);
+    // The same band, dragged wider (apart from the first press, so not a
+    // double click), saves its drawn width and more: the press lands.
+    app.wait(Duration::from_millis(500)).unwrap();
+    drag_band(&mut app, 1, 30.0);
+    app.wait_until("the last column widens", Duration::from_secs(5), |_| {
+        last_width(&held) > f64::from(drawn) + 20.0
+    })
+    .unwrap();
+
+    // Sized columns wider than the editor: the last column is as wide as
+    // its width, so narrowing it narrows the table and is saved.
+    let (mut app, held) = full_width_app(sized_row(&[Some(500), Some(500)]));
+    app.scroll("id:rich-editor-table-scroll", px(10_000.0))
+        .unwrap();
+    app.wait(Duration::from_millis(100)).unwrap();
+    drag_band(&mut app, 1, -50.0);
+    app.wait_until("the last column narrows", Duration::from_secs(5), |_| {
+        held.state().doc().to_json()["content"][0]["content"][0]["content"][1]["attrs"]["colwidth"]
+            == json!([450])
+    })
+    .unwrap();
+
+    // Sized columns wider than the editor: the table scrolls, and a column
+    // past the editor's edge still resizes.
+    let (mut app, held) = full_width_app(sized_row(&[Some(300), Some(300), Some(300)]));
+    app.scroll("id:rich-editor-table-scroll", px(300.0))
+        .unwrap();
+    app.wait(Duration::from_millis(100)).unwrap();
+    drag_band(&mut app, 1, 20.0);
+    app.wait_until("the second column widens", Duration::from_secs(5), |_| {
+        held.state().doc().to_json()["content"][0]["content"][0]["content"][1]["attrs"]["colwidth"]
+            == json!([320])
+    })
+    .unwrap();
+
+    let wide: &[&[&str]] = &[&[
+        "ConferenceRegistrationConfirmation",
+        "InternationalRelationsCoordinator",
+        "AccessibleTransportationReservation",
+        "End",
+    ]];
+    let (_, end, _, right) = column_starts(true, wide);
+    assert!(
+        end >= right,
+        "a table wider than the editor still scrolls: {end} {right}"
+    );
 }
 
 #[test]

@@ -1,7 +1,10 @@
 //! Tables in the view: a table node is a grid whose items are its cells
 //! (rows have no view: the walk of the tree flattens them), each placed at
 //! its slots of the table's map, the columns as wide as their `colwidth`
-//! (else sized by their content, at least `cellMinWidth`), the rows at least
+//! (else sized by their content, at least `cellMinWidth`; with `fullWidth`
+//! the table is at least as wide as the editor's text and those columns share
+//! what the sized ones leave, or the last column takes it when every column
+//! has a width), the rows at least
 //! their `height`. Over the content box: the handles resizing columns and
 //! rows on their right and bottom borders, the current cell's column and
 //! row grips (on the table's top and left borders), which select and drag
@@ -151,22 +154,62 @@ fn track_px(value: Points) -> String {
     format!("{}px", (value.0 * 10.0).round() / 10.0)
 }
 
+/// Whether the table fills the width it is given (`fullWidth`).
+fn full_width(table: &Node) -> bool {
+    table
+        .ty()
+        .spec()
+        .extra
+        .get("fullWidth")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Whether column `col` of `table`, `drawn` wide, takes the room the
+/// others leave in a `fullWidth` table: the last column, every other one
+/// sized, and either without a width or drawn wider than its width. A drag
+/// narrowing it shows nothing. As wide as its width (the table overflows),
+/// it does not, and narrowing it narrows the table.
+fn stretched(table: &Node, col: usize, drawn: Points) -> bool {
+    let (min, _, _) = options(table);
+    let widths = column_widths(table);
+    full_width(table)
+        && col + 1 == widths.len()
+        && widths[..col].iter().all(Option::is_some)
+        && widths[col].is_none_or(|w| drawn - w.max(min) > px(0.5))
+}
+
 /// Saved or dragged widths take precedence. Other columns fit their content
-/// up to a readable line length.
+/// up to a readable line length, or, in a `fullWidth` table, share the room
+/// left: the grid is as wide as the scroll view and an `auto` maximum
+/// stretches into its free space (`fit-content` does not), while the
+/// `min-content` minimum keeps a column that cannot wrap whole, overflowing
+/// the grid so the table scrolls. A `fullWidth` table whose every column
+/// has a width gives the room left to its last column, its width the
+/// least it takes: the table never gets narrower than the editor's text.
 pub(crate) fn column_tracks(table: &Node, preview: Option<(usize, Points)>) -> String {
     let (min, _, _) = options(table);
-    column_widths(table)
+    let full = full_width(table);
+    let widths: Vec<Option<Points>> = column_widths(table)
         .into_iter()
         .enumerate()
-        .map(|(i, width)| {
-            let width = match preview {
-                Some((col, w)) if col == i => Some(w),
-                _ => width,
-            };
-            match width {
-                Some(w) => track_px(w.max(min)),
-                None => "fit-content(20rem)".to_owned(),
+        .map(|(i, width)| match preview {
+            Some((col, w)) if col == i => Some(w),
+            _ => width,
+        })
+        .collect();
+    let all_sized = widths.iter().all(Option::is_some);
+    let last = widths.len().saturating_sub(1);
+    widths
+        .into_iter()
+        .enumerate()
+        .map(|(i, width)| match width {
+            Some(w) if full && all_sized && i == last => {
+                format!("minmax({},auto)", track_px(w.max(min)))
             }
+            Some(w) => track_px(w.max(min)),
+            None if full => "minmax(min-content,auto)".to_owned(),
+            None => "fit-content(20rem)".to_owned(),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -231,6 +274,7 @@ pub(crate) fn grid(wrapper: View, rv: &Rv, item: ReadSignal<BlockItem>) -> View 
     wrapper
         .grid()
         .self_start()
+        .style_when(move || full_width(&item.get().node), |s| s.w(relative(1.0)))
         .grid_template_columns(move || {
             SharedString::from(column_tracks(&item.get().node, preview.get()))
         })
@@ -802,15 +846,20 @@ impl Rv {
                     });
                 }
             }
-            if !t.resizable || !is_desktop() || !contains(&t.bounds, at) {
+            if !t.resizable || !is_desktop() {
                 continue;
             }
+            // The bands `resize_handles` draws: across the table, centered on
+            // each border, so the last column's and row's reach past its edge.
+            let b = t.bounds;
             let near = |edge: Points, v: Points| (edge - v).0.abs() <= HANDLE;
+            let in_height = at.y >= b.top() && at.y < b.bottom();
+            let in_width = at.x >= b.left() && at.x < b.right();
             for (c, (left, right)) in t.cols.iter().enumerate() {
                 if c + 1 == t.cols.len() && !t.last_column_resizable {
                     continue;
                 }
-                if near(*right, at.x) {
+                if in_height && near(*right, at.x) {
                     return Some(TableDrag::ColWidth {
                         table: t.pos,
                         col: c,
@@ -821,7 +870,7 @@ impl Rv {
                 }
             }
             for (r, (top, bottom)) in t.rows.iter().enumerate() {
-                if near(*bottom, at.y) {
+                if in_width && near(*bottom, at.y) {
                     return Some(TableDrag::RowHeight {
                         table: t.pos,
                         row: r,
@@ -1012,6 +1061,14 @@ impl Rv {
         }
     }
 
+    /// Whether column `col` of the table at `table`, `drawn` wide, is
+    /// stretched into a `fullWidth` table's room ([`stretched`]).
+    fn stretched(&self, table: usize, col: usize, drawn: Points) -> bool {
+        let doc = self.session.state().doc().clone();
+        doc.node_at(table)
+            .is_some_and(|t| stretched(&t, col, drawn))
+    }
+
     /// A table gesture ended: the width, height or move it previewed, as
     /// one change.
     pub(crate) fn table_release(&self) {
@@ -1037,7 +1094,9 @@ impl Rv {
                     table, col, start, ..
                 },
                 Some(TablePreview::ColWidth { width, .. }),
-            ) if width != start => Some(set_column_width(Some(table), col, Some(width))),
+            ) if width != start && !(width < start && self.stretched(table, col, start)) => {
+                Some(set_column_width(Some(table), col, Some(width)))
+            }
             (
                 TableDrag::RowHeight {
                     table, row, start, ..
@@ -1203,6 +1262,16 @@ fn layout_of(tree: &Tree, geo: &Geometry, table_id: u64, table_node: &Node) -> O
         tops[rect.top] = Some(o.y);
         bottoms[rect.bottom - 1] = Some(o.y + f.size.height);
     }
+    // Columns past a `fullWidth` grid's box (wider than the editor) are
+    // still the table's: its bounds reach the last cell's right edge.
+    let right = rights
+        .iter()
+        .flatten()
+        .fold(bounds.origin.x + bounds.size.width, |a, &r| a.max(r));
+    let bounds = Bounds::new(
+        bounds.origin,
+        Size::new(right - bounds.origin.x, bounds.size.height),
+    );
     let cols = edges(
         &lefts,
         &rights,
@@ -1270,6 +1339,7 @@ fn edges(
 mod tests {
     use super::*;
     use crate::rich_editor::{
+        extensions::{ExtensionManager, kit},
         model::{Attrs, Fragment},
         tables::test_util::{cell_pos, doc, p, schema, table, td, tds, tr},
     };
@@ -1304,6 +1374,69 @@ mod tests {
         assert_eq!(
             row_tracks(&t, Some((1, px(30.0)))),
             "minmax(40px,auto) minmax(30px,auto)"
+        );
+    }
+
+    #[test]
+    fn a_full_width_tables_last_sized_column_takes_the_room_left() {
+        let manager = ExtensionManager::with_core(vec![
+            kit::starter_kit(),
+            kit::table_kit().configure(serde_json::json!({ "table": { "fullWidth": true } })),
+        ])
+        .unwrap();
+        let s = manager.schema().clone();
+        let cell = |text: &str, width: Option<u32>| {
+            let attrs = width.map(|w| {
+                let mut a = Attrs::new();
+                a.insert("colwidth".into(), serde_json::json!([w]));
+                a
+            });
+            let para = s
+                .node(
+                    "paragraph",
+                    None,
+                    Fragment::from(vec![s.text(text, vec![])]),
+                    vec![],
+                )
+                .unwrap();
+            s.node("tableCell", attrs, Fragment::from(vec![para]), vec![])
+                .unwrap()
+        };
+        let table_of = |cells: Vec<Node>| {
+            let row = s
+                .node("tableRow", None, Fragment::from(cells), vec![])
+                .unwrap();
+            s.node("table", None, Fragment::from(vec![row]), vec![])
+                .unwrap()
+        };
+        let mixed = table_of(vec![cell("a", Some(120)), cell("b", None)]);
+        assert_eq!(
+            column_tracks(&mixed, None),
+            "120px minmax(min-content,auto)"
+        );
+        // Resizing the last column without a width: the room still goes to it.
+        assert_eq!(
+            column_tracks(&mixed, Some((1, px(90.0)))),
+            "120px minmax(90px,auto)"
+        );
+        let all = table_of(vec![cell("a", Some(120)), cell("b", Some(80))]);
+        assert_eq!(column_tracks(&all, None), "120px minmax(80px,auto)");
+        // Drawn wider than its width, or without one, the last column takes
+        // the room left: narrowing it shows nothing, a drag saves nothing.
+        assert!(stretched(&all, 1, px(200.0)) && stretched(&mixed, 1, px(200.0)));
+        // As wide as its width (the table overflows), narrowing it shows.
+        assert!(!stretched(&all, 1, px(80.0)));
+        assert!(!stretched(&all, 0, px(200.0)));
+        let first_unsized = table_of(vec![cell("a", None), cell("b", Some(80))]);
+        assert!(!stretched(&first_unsized, 1, px(200.0)));
+        assert!(!stretched(
+            &table(vec![tr(vec![td("a"), td("b")])]),
+            1,
+            px(200.0)
+        ));
+        assert_eq!(
+            column_tracks(&all, Some((0, px(150.0)))),
+            "150px minmax(80px,auto)"
         );
     }
 

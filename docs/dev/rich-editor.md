@@ -275,7 +275,12 @@ children do. The app places them in the content box's points, which `nodeRect(po
 Tables (`view/table.rs`): the tree walk flattens a table (a node whose spec's `extra.tableRole` is `"table"`): its
 cells, row after row, are the table's children; rows have no view. The table's block is a grid (`grid()`): a column
 per column of its `TableMap`. The grid measures the rendered cells, including inline node views, with
-`fit-content(20rem)` for each automatic track. A saved `colwidth` or live resize sets a track to that width, at least
+`fit-content(20rem)` for each automatic track (`minmax(min-content,auto)` with `fullWidth`: the grid is as wide as the
+scroll view, so the free space stretches those tracks, long text wraps, and a column that cannot wrap overflows the
+grid and scrolls; when every column has a width, the last one's track is `minmax(<width>,auto)`, so the table never
+shrinks below the editor's text after the last resize; a drag narrowing that column while it is drawn wider than its
+width, which would show nothing, saves nothing, while narrowing it in a table wider than the editor is saved). The
+table's hit bounds reach its last cell, so the handles of columns past the editor's edge still resize. A saved `colwidth` or live resize sets a track to that width, at least
 `cellMinWidth`. Each row fits its content and is at least its saved `height`. The horizontal scroll view gives the
 grid room to measure its contents and scrolls when it is wider than the editor. Each cell is placed at its map slots (`col-start` / `col-end` /
 `row-start` / `row-end`, so spans and rowspans need no row views) and takes its node part as other blocks do. The
@@ -288,7 +293,8 @@ beside it may be nearer), and a press on a cell's or table's own padding places 
 cell. Up and Down on a cell's first or last visual line go to the cell above or below at the goal x (with no such
 cell, the keymaps' `arrow` leaves the table); Tab and Shift-Tab are the `table` extension's keys. Over the content,
 `controls` draws the tables' handles while the document can be edited: on desktops a 6-point band on each column's
-right border and each row's bottom border (`resizable`; the last column's when `lastColumnResizable`), the column- or
+right border and each row's bottom border (`resizable`; the last column's when `lastColumnResizable`; a press anywhere
+on a band resizes, including the half of the last column's or row's band past the table's edge), the column- or
 row-resize cursor, its line (`tableResizeHandle`, the theme's `primary`) on hover and while dragged; a drag previews
 the new size in the grid's tracks and commits `setColumnWidth` / `setRowHeight` once on release (at least
 `cellMinWidth`, rows 16 points). The current cell gets a column grip on the table's top border and a row grip
@@ -499,7 +505,7 @@ A port of prosemirror-tables with Tiptap's table extensions on top. Nothing in i
 is its spec's `extra.tableRole` (`"table"`, `"row"`, `"cell"`, `"header_cell"`, `TableRole`), and
 `table_node_types(schema)` finds the four (cached by name in the schema; a cached `NodeType` would hold its schema).
 `tables::nodes` gives Tiptap's specs: `table` (`tableRow+`, isolating, `extra.render = "table"` plus the options the
-view reads: `cellMinWidth`, `resizable`, `lastColumnResizable`), `tableRow` (`height`), `tableCell` / `tableHeader`
+view reads: `cellMinWidth`, `resizable`, `lastColumnResizable`, `fullWidth`), `tableRow` (`height`), `tableCell` / `tableHeader`
 (`block+`, isolating, `colspan`, `rowspan`, `colwidth`: one width per spanned column, 0 for none). HTML is Tiptap's
 (`<table style><colgroup>…<tbody>`, `data-colwidth`).
 
@@ -538,7 +544,7 @@ view reads: `cellMinWidth`, `resizable`, `lastColumnResizable`), `tableRow` (`he
   `setRowHeight({row, height, table})`; `table` is the position before a table, the selection's by default. The
   Rust API takes `Points`; JSON takes numbers, `null` for none. Tiptap's Tab is `go_to_next_cell_or_add_row`.
 - The kit (`extensions/kit.rs`): `table` (options `HTMLAttributes`, `resizable`, `cellMinWidth`,
-  `lastColumnResizable`, `allowTableNodeSelection`; Tab, Shift-Tab, Backspace / Delete deleting a fully selected
+  `lastColumnResizable`, `allowTableNodeSelection`, `fullWidth`; Tab, Shift-Tab, Backspace / Delete deleting a fully selected
   table; `fix_tables_plugin` and `table_editing`), `tableRow`, `tableCell`, `tableHeader`, and `table_kit()`
   (`tableKit`), outside `starter_kit`. In JS: `TableKit`, `RichTable`, `RichTableRow`, `RichTableHeader`,
   `RichTableCell` (`nsh/base`'s `Table*` names are the `Table` component's) and the command helpers of
