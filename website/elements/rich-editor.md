@@ -74,12 +74,17 @@ reading view that turns to editing when someone starts typing. Text the app inse
 ## Styling
 
 The editor draws the document with the app's look: `classes` and `styles` style its parts (`root`, `content`, `caret`,
-`selection`, `placeholder`, `composition`, `selectedNode`, `listMarker`, the touch selection's handles
+`selection`, `placeholder`, `composition`, `selectedNode`, `listMarker`, a task item's `taskCheckbox` and the
+`taskCheckmark` in it, the touch selection's handles
 `selectionHandle`, `selectionHandleStart`, `selectionHandleEnd`, and for tables `selectedCell`,
 `tableGrip`, `tableResizeHandle`, `tableDropIndicator`), its nodes by type (`nodes: { heading:
 "text-2xl font-bold", "heading[level=2]": "text-xl" }`) and its marks (`marks: { bold: "font-bold" }`). The items of
 lists whose node spec sets `extra.listMarker` to `"bullet"` or `"ordered"` (the starter schema's lists) show a marker
 in the `listMarker` part: `•`, `◦`, `▪` by depth, or numbers from the list's `start`, placed before the item, in the list's indent (`pl-6` on the list, as a browser indents `ul`).
+A task item's checkbox is a box of the app's (`taskCheckbox`, whose `checked:` classes follow the item). Give the
+`taskCheckmark` part classes or a style and the box shows a `✓` while the item is done (12 points, bold,
+`foreground` by default: `text-primary` on an outlined box, `text-primary-foreground` on a filled one); without it the
+box draws nothing of its own.
 
 ```tsx
 <RichEditor

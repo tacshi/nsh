@@ -143,7 +143,9 @@ part (`classes.nodes` / `styles.nodes` by type name, then `type[attr=value]`), n
 is `"bullet"` or `"ordered"` (the starter's lists) carry a marker the view draws in the `listMarker` part, absolutely
 placed in the indent before the item (`•`, `◦`, `▪` by bulleted depth, or the number from the list's
 `extra.listMarkerStart` attribute, `order` by default), as TextView places its markers; it is not in the document and
-takes no positions; a textblock is one text whose spans are its texts with
+takes no positions; a task item (`extra.render = "task"`) is a row of a `Checkbox` filling the `taskCheckbox` part's
+box, whose indicator holds a `✓` in the `taskCheckmark` part while `checked` and the app gives that part classes or a
+style (without it nothing is drawn, as before the part existed), and its content; a textblock is one text whose spans are its texts with
 their marks' parts (`classes.marks`), split at inline decorations (their `class`); inline leaves are their one-unit
 `leafText` (a line break), attachments (their node view), their `renderText` as a span of their part (a mention's
 `@name`, still one position: a press inside it lands on its nearer side), else a box of their part; widget decorations are

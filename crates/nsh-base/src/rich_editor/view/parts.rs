@@ -56,6 +56,12 @@ pub struct RichEditorClasses {
     /// classes follow the item.
     #[prop(skip_none)]
     pub task_checkbox: Option<SharedString>,
+    /// The mark in a done task item's checkbox: a `✓` centered in it, at
+    /// 12 points, bold, in the theme's `foreground` (`text-primary` on an
+    /// outlined box, `text-primary-foreground` on a filled one). Drawn only
+    /// when the app gives this part classes or a style.
+    #[prop(skip_none)]
+    pub task_checkmark: Option<SharedString>,
     /// A block the selection is in while the editor has the focus (after
     /// its node's classes), as `focusMode` picks them.
     #[prop(skip_none)]
@@ -140,6 +146,10 @@ pub struct RichEditorStyles {
     /// A task item's checkbox.
     #[prop(skip_none)]
     pub task_checkbox: Option<PartStyle>,
+    /// The mark in a done task item's checkbox (drawn only when this part
+    /// or its classes are given).
+    #[prop(skip_none)]
+    pub task_checkmark: Option<PartStyle>,
     /// A block the selection is in, while focused.
     #[prop(skip_none)]
     pub focused_node: Option<PartStyle>,
@@ -226,6 +236,7 @@ pub(crate) enum Part {
     GapCursor,
     DropCursor,
     TaskCheckbox,
+    TaskCheckmark,
     FocusedNode,
     SelectedCell,
     TableGrip,
@@ -250,6 +261,7 @@ impl RichEditorClasses {
             Part::GapCursor => self.gap_cursor.as_ref(),
             Part::DropCursor => self.drop_cursor.as_ref(),
             Part::TaskCheckbox => self.task_checkbox.as_ref(),
+            Part::TaskCheckmark => self.task_checkmark.as_ref(),
             Part::FocusedNode => self.focused_node.as_ref(),
             Part::SelectedCell => self.selected_cell.as_ref(),
             Part::TableGrip => self.table_grip.as_ref(),
@@ -276,6 +288,7 @@ impl RichEditorStyles {
             Part::GapCursor => &self.gap_cursor,
             Part::DropCursor => &self.drop_cursor,
             Part::TaskCheckbox => &self.task_checkbox,
+            Part::TaskCheckmark => &self.task_checkmark,
             Part::FocusedNode => &self.focused_node,
             Part::SelectedCell => &self.selected_cell,
             Part::TableGrip => &self.table_grip,

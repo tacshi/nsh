@@ -828,8 +828,11 @@ fn image_box(width: Option<f32>, height: Option<f32>, natural: Option<(f32, f32)
 }
 
 /// A task item's checkbox, before the item's content: unstyled
-/// (`taskCheckbox` part); a press sets the item's `checked` (an
-/// `AttrStep`), disabled while the document cannot be edited.
+/// (`taskCheckbox` part); an app that styles the `taskCheckmark` part gets
+/// a `✓` in it while the item is done, as a text view's task marker has
+/// (without that part, nothing is drawn, as before it was added); a press sets
+/// the item's `checked` (an `AttrStep`), disabled while the document cannot
+/// be edited.
 fn task_checkbox(rv: Rv, item: ReadSignal<BlockItem>) -> impl IntoElement {
     let props = rv.props;
     let checked = move || {
@@ -841,6 +844,7 @@ fn task_checkbox(rv: Rv, item: ReadSignal<BlockItem>) -> impl IntoElement {
             .unwrap_or(false)
     };
     let press_rv = rv.clone();
+    let mark_rv = rv.clone();
     // The part is the checkbox's box; the checkbox fills it. The box
     // follows the item's state, so the app's `checked:` classes show it.
     view()
@@ -860,7 +864,32 @@ fn task_checkbox(rv: Rv, item: ReadSignal<BlockItem>) -> impl IntoElement {
                         press_rv.set_checked(pos, *next);
                     }
                 })
-                .size_full(),
+                .size_full()
+                .items_center()
+                .justify_center()
+                .indicator(when(
+                    move || {
+                        checked()
+                            && (props
+                                .classes
+                                .with(|c| c.part(Part::TaskCheckmark).is_some())
+                                || props.styles.with(|s| s.part(Part::TaskCheckmark).is_some()))
+                    },
+                    move || {
+                        part(
+                            text("\u{2713}")
+                                // The checkbox says its state; the glyph is no
+                                // name of it.
+                                .accessibility_elements_hidden(true)
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(move || theme().foreground),
+                            &mark_rv,
+                            Part::TaskCheckmark,
+                        )
+                    },
+                )),
         )
 }
 

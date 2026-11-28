@@ -151,6 +151,8 @@ fn feature_schema() -> Schema {
 struct FeaturesProps {
     session: Option<EditorSession>,
     editable: bool,
+    /// Classes for the `taskCheckmark` part.
+    checkmark: Option<String>,
 }
 
 /// An editor with placeholders, showing the document's JSON and its count
@@ -204,6 +206,7 @@ fn Features(props: FeaturesProps) -> impl IntoElement {
                         let mut classes = nsh_base::rich_editor::view::RichEditorClasses::default();
                         classes.content = Some("pl-8".into());
                         classes.task_checkbox = Some("w-4 h-4".into());
+                        classes.task_checkmark = props.checkmark.clone().map(Into::into);
                         // A code block with a background and padding of its
                         // own.
                         classes.nodes = Some(std::collections::BTreeMap::from([(
@@ -227,6 +230,10 @@ fn Features(props: FeaturesProps) -> impl IntoElement {
 }
 
 fn start_features(doc: Value, editable: bool) -> Headless {
+    start_features_with(doc, editable, None)
+}
+
+fn start_features_with(doc: Value, editable: bool, checkmark: Option<String>) -> Headless {
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
         // Made in the engine, so its keymaps follow the test environment's OS,
@@ -242,6 +249,7 @@ fn start_features(doc: Value, editable: bool) -> Headless {
             FeaturesProps {
                 session: Some(session),
                 editable,
+                checkmark: checkmark.clone(),
             }
         }))
     };
@@ -314,14 +322,31 @@ fn placeholders_hide_while_read_only() {
 
 #[test]
 fn a_task_checkbox_toggles_checked() {
-    let mut app = start_features(
-        json!({"type": "doc", "content": [{"type": "todo", "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": "buy"}]}
-        ]}]}),
-        true,
+    let doc = json!({"type": "doc", "content": [{"type": "todo", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "buy"}]}
+    ]}]});
+    let mut app = start_features(doc.clone(), true);
+    app.press("role:checkbox").unwrap();
+    see_json(&mut app, "\"checked\":true");
+    // Without a `taskCheckmark` part the box stays the app's alone.
+    app.wait(std::time::Duration::from_millis(100)).unwrap();
+    assert!(!app.shows("\u{2713}"));
+
+    // With one, a done item's box holds the mark, and an open one's none.
+    let mut app = start_features_with(doc, true, Some("text-primary".into()));
+    assert!(
+        !app.shows("\u{2713}"),
+        "no mark while the item is open"
     );
     app.press("role:checkbox").unwrap();
     see_json(&mut app, "\"checked\":true");
+    app.wait_for("text:\u{2713}").unwrap();
+    app.press("role:checkbox").unwrap();
+    see_json(&mut app, "\"checked\":false");
+    app.wait_until("the mark goes", std::time::Duration::from_secs(5), |s| {
+        s.layout("text:\u{2713}").unwrap().is_none()
+    })
+    .unwrap();
 }
 
 fn see_json(app: &mut Headless, fragment: &str) {

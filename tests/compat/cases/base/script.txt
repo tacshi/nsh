@@ -4997,6 +4997,36 @@ expect CellD
 expect AutoTwo
 frame id:rich-auto 20 329 370 34
 frame id:rich-capped 20 367 370 40
+# base-rich-editor-task-checkmark
+tap id:case-base-rich-editor-task-checkmark
+# Without the part a done item's box holds no mark, as before it was added.
+expect CheckmarkMode none
+expect TaskDone
+expect TaskOpen
+absent ✓
+# Its classes draw the mark in their color.
+tap text:CheckmarkMode none
+expect CheckmarkMode classes
+expect ✓
+style text:✓ color #ff0000ff
+# A style alone draws it too.
+tap text:CheckmarkMode classes
+expect CheckmarkMode styles
+expect ✓
+style text:✓ color #0000ffff
+# Taking the part away again empties the done item's box.
+tap text:CheckmarkMode styles
+expect CheckmarkMode none
+expect TaskDone
+absent ✓
+# Unchecked, the item's box is empty again.
+tap text:CheckmarkMode none
+expect CheckmarkMode classes
+expect ✓
+tap text:✓
+absent ✓
+covers [props] RichEditor.classes
+covers [props] RichEditor.styles
 # base-transition-shader
 tap id:case-base-transition-shader
 # Pages and a dialog with a `transitionShader` come and go as without one:
